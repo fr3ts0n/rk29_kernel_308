@@ -154,6 +154,9 @@ static int gt801_init_panel(struct gt801_ts_data *ts)
     return 0;
 }
 
+/** current status of each finger */
+static int fingerStat[NUM_FINGERS];
+
 static void gt801_ts_work_func(struct work_struct *work)
 {
 	int  touchIdx = 0;
@@ -162,7 +165,8 @@ static void gt801_ts_work_func(struct work_struct *work)
     unsigned char buf[TOUCH_RX_BUF_SIZE];
 	unsigned short x;
 	unsigned short y;
-    int i, j, ret;
+    unsigned short press;
+    int  ret, needToReport;
 
     struct gt801_ts_data *ts = container_of(work, struct gt801_ts_data, work);
 	
@@ -176,9 +180,12 @@ static void gt801_ts_work_func(struct work_struct *work)
 		
 		return;
     }
+
+#if GT801_DEBUG
 	/*
 	 * dump received data
 	 */
+    int i, j;
 	// loop through touch points
 	for(i=0; i<NUM_FINGERS; i++)
 	{
@@ -190,35 +197,43 @@ static void gt801_ts_work_func(struct work_struct *work)
       }
       gt801printk("\n");
 	}
+#endif
 
 	// calculate and report all reported touch events
     for(touchIdx=0; touchIdx<NUM_FINGERS;touchIdx++)
 	{
-        input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, touchIdx);
-		if(buf[touchRegMap[touchIdx][ptpressure]] == 0)
-		{
-			gt801printk("%s:-%d-:buf=%d touch up\n",__FUNCTION__,touchIdx,buf[touchRegMap[touchIdx][ptpressure]]);
-		}
-		else
-		{
-            // get coordinates from buffer
-            x = (((((unsigned short)buf[touchRegMap[touchIdx][ptxh]] )<< 8) )
-                | buf[touchRegMap[touchIdx][ptxl]]);
-		    y = (((((unsigned short)buf[touchRegMap[touchIdx][ptyh]] )<< 8) )
-		        | buf[touchRegMap[touchIdx][ptyl]]);
+        press = buf[touchRegMap[touchIdx][ptpressure]];
+        needToReport = (press != 0 || press != fingerStat[touchIdx]);
+        fingerStat[touchIdx] = press;
 
-		    // correct coordinates based on selected options
-	        if (ts->options & GT801_OPT_SWAP_XY) swap(x, y);
-            if (ts->options & GT801_OPT_INV_X) x = ts->x_max - x;
-            if (ts->options & GT801_OPT_INV_Y) y = ts->y_max - y;
+		if(needToReport)
+		{
+          input_report_abs(ts->input_dev, ABS_MT_TRACKING_ID, touchIdx);
+          if(press == 0)
+          {
+              gt801printk("%s:-%d-:buf=%d touch up\n",__FUNCTION__,touchIdx,buf[touchRegMap[touchIdx][ptpressure]]);
+          }
+          else
+          {
+              // get coordinates from buffer
+              x = (((((unsigned short)buf[touchRegMap[touchIdx][ptxh]] )<< 8) )
+                  | buf[touchRegMap[touchIdx][ptxl]]);
+              y = (((((unsigned short)buf[touchRegMap[touchIdx][ptyh]] )<< 8) )
+                  | buf[touchRegMap[touchIdx][ptyl]]);
 
-            // report coordinates
-	        gt801printk("input_report_abs-%d-(%d/%d)\n",touchIdx, x, y);
-			input_report_abs(ts->input_dev, ABS_MT_POSITION_X, x);
-			input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, y);
-            input_report_abs(ts->input_dev, ABS_MT_PRESSURE,   255);
-		}
-        input_mt_sync(ts->input_dev);
+              // correct coordinates based on selected options
+              if (ts->options & GT801_OPT_SWAP_XY) swap(x, y);
+              if (ts->options & GT801_OPT_INV_X) x = ts->x_max - x;
+              if (ts->options & GT801_OPT_INV_Y) y = ts->y_max - y;
+
+              // report coordinates
+              gt801printk("input_report_abs-%d-(%d/%d)\n",touchIdx, x, y);
+              input_report_abs(ts->input_dev, ABS_MT_POSITION_X, x);
+              input_report_abs(ts->input_dev, ABS_MT_POSITION_Y, y);
+              input_report_abs(ts->input_dev, ABS_MT_PRESSURE,   255);
+          }
+          input_mt_sync(ts->input_dev);
+        }
     }
 
     input_sync(ts->input_dev);
@@ -450,6 +465,7 @@ static int gt801_ts_probe(struct i2c_client *client, const struct i2c_device_id 
 	ts->input_dev->dev.parent = &client->dev;
 
     ts->input_dev->evbit[0] = BIT_MASK(EV_SYN) | BIT_MASK(EV_ABS);
+    set_bit(INPUT_PROP_DIRECT, ts->input_dev->propbit);
   //  ts->input_dev->absbit[0] = 
 	//	BIT(ABS_MT_POSITION_X) | BIT(ABS_MT_POSITION_Y) | 
 	//	BIT(ABS_MT_TOUCH_MAJOR) | BIT(ABS_MT_WIDTH_MAJOR);  // for android
